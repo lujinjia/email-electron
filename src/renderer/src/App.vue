@@ -8,8 +8,15 @@
         <el-button @click="transferMail">转发</el-button>
       </el-header>
       <el-container>
-
-        <el-aside width="230px">
+        <el-aside width="130px">
+          <el-tree
+            style="max-width: 600px"
+            :data="treeData"
+            :props="defaultProps"
+            @node-click="handleNodeClick"
+          />
+        </el-aside>
+        <el-aside width="210px">
           <div class="flex flex-wrap gap-4">
             <el-card style="width: 100%" shadow="always" v-for="mail in mailList"
             :class="{
@@ -32,7 +39,7 @@
         </el-container>
       </el-container>
     </el-container>
-    <el-dialog v-model="dialogFormVisible" title="发送邮件" width="500">
+    <el-dialog v-model="dialogFormVisible" destroy-on-close title="发送邮件" width="800" :close-on-press-escape="false" :close-on-click-modal="false">
       <el-form :model="form">
         <el-form-item label="收件人">
           <el-input v-model="form.to"/>
@@ -42,7 +49,7 @@
           <el-input v-model="form.subject"/>
         </el-form-item>
       </el-form>
-      <div class="editor" id="editor">
+      <div id="editor">
       </div>
       <template #footer>
         <div class="dialog-footer">
@@ -55,16 +62,52 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, reactive, nextTick, onMounted } from 'vue'
+import { ref, watch, reactive, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import { io } from 'socket.io-client'
 
-import Quill from 'quill';
-
-
 const socket = io('ws://localhost:3000')
 
-let quill
+let editor
+
+interface Tree {
+  label: string
+  type: string
+  children?: Tree[]
+}
+
+const handleNodeClick = (data: Tree) => {
+  console.log(data)
+}
+
+//收件箱，已发送，草稿箱，星标邮件
+const treeData: Tree[] = [
+  {
+    label: '账号名',
+    type: 'ROOT',
+    children: [
+      {
+        label: '收件箱',
+        type: 'INBOX',
+        children: [],
+      },
+      {
+        label: '已发送',
+        type: 'SEND',
+        children: [],
+      },
+      {
+        label: '草稿箱',
+        type: 'draft',
+        children: [],
+      },
+      {
+        label: '星标邮件',
+        type: 'star',
+        children: [],
+      },
+    ],
+  }]
 
 // 初始化邮件列表
 socket.on('MAIL_INIT', (res) => {
@@ -105,18 +148,56 @@ const getMailDetail = (mail) => {
   selectedID.value = mail.id
 }
 
-const openSendWin = () => {
+const getMail = (id) => {
+  return mailList.value.find(item => item.id === id.value)
+}
+
+const openSendWin = (email) => {
   dialogFormVisible.value = true
+  editor = $("#editor").summernote({
+    height: 200,   //set editable area's height
+    minHeight: 200,             // set minimum height of editor
+    maxHeight: 400,
+    codemirror: { // codemirror options
+      theme: 'monokai'
+    }
+  });
   nextTick(() => {
-    const options = {
-      debug: 'info',
-      modules: {
-        toolbar: false,
-      },
-      placeholder: '请输入邮件内容（支持富文本)...',
-      theme: 'snow'
-    };
-    quill = new Quill('#editor', options);
+    let HTMLstring = email.html
+    const sendName = email.to
+    const mailName = email.mailName
+    const datetime = email.datatime
+    const subject = email.theme
+    const themeBlock = `
+    <div style="position: relative;">
+      <div style="font-size: 12px;font-family: Arial Narrow;padding:2px 0 2px 0;">
+        ------------------ 原始邮件 ------------------
+      </div>
+      <div style="font-size: 12px;background:#efefef;padding:8px;">
+        <div>
+          <b>发件人:</b>
+          "${mailName}" &lt;<a href="mailto:${email.form}" rel="noopener"
+            target="_blank">${email.form}</a>&gt;;
+          </div>
+        <div>
+          <b>发送时间:</b>
+          &nbsp;${datetime}
+        </div>
+        <div>
+          <b>收件人:</b>
+          &nbsp;"${sendName}"&lt;<a href="mailto:${sendName}" rel="noopener"
+            target="_blank">${sendName}</a>&gt;;<wbr>
+        </div>
+        <div></div>
+        <div>
+          <b>主题:</b>&nbsp;${subject}
+        </div>
+      </div>
+      <div><br></div>
+    </div>
+    `
+    HTMLstring = HTMLstring ? themeBlock + HTMLstring : HTMLstring
+    $('#editor').summernote('pasteHTML', HTMLstring);
   })
 }
 
@@ -125,11 +206,12 @@ const sendMail = async () => {
     from: '924515022@qq.com',
     to: form.to,
     subject: form.subject,
-    text: quill.getSemanticHTML()
+    text: $('#editor').summernote('code')
   })
   if (res) {
     ElMessage.success('发送成功')
     dialogFormVisible.value = false
+    syncMailList()
   } else {
     ElMessage.error('发送失败')
   }
@@ -137,12 +219,20 @@ const sendMail = async () => {
 
 // 回复邮件
 const replyMail = () => {
-
+  const selectedMail = getMail(selectedID)
+  // 回复邮件，收件人，主题以及编辑器的内容（需要收信人块）
+  form.to = selectedMail.form
+  form.subject = `回复：${selectedMail.theme}`
+  openSendWin(selectedMail)
 }
 
 // 转发邮件
 const transferMail = () => {
-
+  const selectedMail = getMail(selectedID)
+  // 回复邮件，收件人，主题以及编辑器的内容（需要收信人块）
+  form.to = ''
+  form.subject = `转发：${selectedMail.theme}`
+  openSendWin(selectedMail)
 }
 </script>
 
@@ -155,7 +245,6 @@ const transferMail = () => {
   }
 
   .common-layout .el-aside {
-    background-color: var(--el-color-primary-light-8);
     color: var(--el-text-color-primary);
     height: 90vh;
   }
@@ -176,9 +265,8 @@ const transferMail = () => {
     background-color: beige;
   }
 
-  .editor {
+  #editor {
     width: 100%;
-    height: 200px;
     border: 1px solid #ccc;
   }
 </style>
